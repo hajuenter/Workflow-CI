@@ -1,0 +1,59 @@
+name: MLflow CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  mlops-workflow:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: heart-ci-env
+          environment-file: MLProject/conda.yaml
+          auto-activate-base: false
+
+      - name: Retraining Model via MLflow Run
+        env:
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+          MLFLOW_TRACKING_URI: https://dagshub.com/hajuenter/ach_bahrul_heart_disease_mlflow.mlflow
+          MLFLOW_TRACKING_USERNAME: hajuenter
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          cd MLProject
+          mlflow run . --experiment-name "Heart Disease CI Three" -P n_estimators=100 -P test_size=0.2 -P random_state=42
+
+      - name: Upload Artifact to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained-model
+          path: MLProject/outputs/
+
+      - name: Build & Push Docker Image
+        env:
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+          MLFLOW_TRACKING_URI: https://dagshub.com/hajuenter/ach_bahrul_heart_disease_mlflow.mlflow
+          MLFLOW_TRACKING_USERNAME: hajuenter
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+
+          mlflow models build-docker \
+            -m "MLProject/outputs" \
+            -n "${DOCKERHUB_USERNAME}/heart-disease-model:latest" \
+            --install-mlflow
+
+          docker push "${DOCKERHUB_USERNAME}/heart-disease-model:latest"
